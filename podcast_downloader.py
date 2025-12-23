@@ -176,17 +176,11 @@ class PodcastDownloader:
         safe_title = re.sub(r'[\\/:*?"<>|]', '', title)
         safe_title = re.sub(r'\s+', '_', safe_title).strip()
         
-        # Create filename
-        if published:
-            # Try to extract date from published date
-            try:
-                dt = datetime.strptime(published, '%a, %d %b %Y %H:%M:%S %z')
-                date_str = dt.strftime('%Y-%m-%d')
-                filename = f"{date_str}_{safe_title}.mp3"
-            except:
-                filename = f"{safe_title}.mp3"
-        else:
-            filename = f"{safe_title}.mp3"
+        # Create filename with incremental index for chronological ordering
+        # Format: 001_Title.mp3, 002_Title.mp3, etc.
+        # This ensures alphabetical sorting = chronological order
+        index_str = f"{index:03d}"  # Zero-padded to 3 digits (supports up to 999)
+        filename = f"{index_str}_{safe_title}.mp3"
         
         filepath = self.podcast_dir / filename
         

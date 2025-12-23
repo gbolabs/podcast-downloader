@@ -72,6 +72,8 @@ Podcast_Name/
 └── README.md
 ```
 
+**Note:** Episode files are named with dates in `YYYY-MM-DD` format, which ensures they sort chronologically when listed alphabetically. See [000_CHRONOLOGICAL_SORTING_DEMO.md](000_CHRONOLOGICAL_SORTING_DEMO.md) for more details.
+
 The README.md will contain:
 - Podcast information
 - Feed URL

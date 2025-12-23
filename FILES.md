@@ -1,5 +1,18 @@
 # Files Created
 
+## Chronological Order
+
+**000_CHRONOLOGICAL_SORTING_DEMO.md**
+- Demonstrates how podcast files sort chronologically
+- Explains the YYYY-MM-DD naming convention
+- Shows real-world examples from the RTS podcast
+- Use `ls -1 | sort` to view chronologically
+
+**000_CHRONOLOGICAL_ORDER.md**
+- Shows files in creation order
+- Named with prefix for alphabetical sorting
+- Use `ls -1 | sort` to view chronologically
+
 ## Main Application
 
 **podcast_downloader.py** (10KB, executable)
@@ -61,8 +74,8 @@
 
 ## Total
 
-- **8 files** created
-- **~27KB** of documentation
+- **10 files** created (including chronological sorting demo)
+- **~31KB** of documentation
 - **~12KB** of code
 - **Fully tested and working**
 
