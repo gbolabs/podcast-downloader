@@ -6,7 +6,11 @@ A Python CLI tool to download podcast episodes from RSS feeds.
 
 - Downloads the latest N episodes (default: 30)
 - Creates organized directories named after the podcast
-- Numbers files (001-999) for chronological ordering
+- Dynamic numbering (1-9, 01-99, 001-999) based on episode count
+- **Smart filename shortening** for devices with length limits (e.g., Remi babyphone)
+  - Converts accents to ASCII (é→e, ô→o)
+  - Removes stop words (le, la, the, of...)
+  - Abbreviates long words intelligently
 - Tracks downloaded episodes to avoid duplicates
 - Shows download progress
 - Generates a README with episode metadata
@@ -41,8 +45,11 @@ podcast-downloader https://example.com/podcast.rss -n 10
 # Save to specific directory
 podcast-downloader https://example.com/podcast.rss -o ~/podcasts
 
+# Limit filename length (for devices like Remi babyphone)
+podcast-downloader https://example.com/podcast.rss -m 27
+
 # Combine options
-podcast-downloader https://example.com/podcast.rss -n 20 -o ~/podcasts
+podcast-downloader https://example.com/podcast.rss -n 20 -o ~/podcasts -m 27
 ```
 
 ### As a library
@@ -53,7 +60,8 @@ from podcast_downloader import PodcastDownloader
 downloader = PodcastDownloader(
     feed_url="https://example.com/podcast.rss",
     max_episodes=10,
-    output_dir="./podcasts"
+    output_dir="./podcasts",
+    max_filename_length=27  # Optional: for devices with filename limits
 )
 downloader.run()
 ```
@@ -126,6 +134,7 @@ pytest
 - Python 3.8+
 - feedparser
 - requests
+- unidecode (for smart filename shortening)
 
 ## License
 

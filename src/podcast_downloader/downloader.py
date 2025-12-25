@@ -8,6 +8,7 @@ Features:
 - Stores downloaded episodes with proper filenames
 - Maintains a README.md with metadata
 - Tracks already downloaded items
+- Smart filename truncation for devices with length limits
 """
 
 import os
@@ -20,9 +21,133 @@ from datetime import datetime
 from pathlib import Path
 import re
 
+try:
+    from unidecode import unidecode
+except ImportError:
+    unidecode = None
+
+
+# Stop words to remove when shortening titles (multilingual)
+STOP_WORDS = {
+    # French
+    'le', 'la', 'les', 'de', 'du', 'des', 'un', 'une', 'et', 'en', 'au', 'aux',
+    'ce', 'cette', 'ces', 'son', 'sa', 'ses', 'mon', 'ma', 'mes', 'ton', 'ta',
+    'tes', 'notre', 'nos', 'votre', 'vos', 'leur', 'leurs', 'qui', 'que', 'quoi',
+    'dont', 'où', 'pour', 'par', 'sur', 'sous', 'avec', 'sans', 'dans', 'est',
+    # English
+    'the', 'a', 'an', 'of', 'to', 'and', 'in', 'on', 'at', 'for', 'with',
+    'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+    'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might',
+    'this', 'that', 'these', 'those', 'it', 'its',
+}
+
+
+class TitleShortener:
+    """Intelligently shortens titles while preserving meaning."""
+
+    def __init__(self, max_length, preserve_numbers=True):
+        self.max_length = max_length
+        self.preserve_numbers = preserve_numbers
+
+    def shorten(self, title, prefix_length=0):
+        """
+        Shorten a title to fit within max_length (including prefix).
+
+        Args:
+            title: The original title
+            prefix_length: Length of prefix (e.g., "01_") to account for
+
+        Returns:
+            Shortened title that fits within max_length - prefix_length - 4 (.mp3)
+        """
+        available = self.max_length - prefix_length - 4  # -4 for ".mp3"
+        if available <= 0:
+            return ""
+
+        # Clean the title first
+        cleaned = self._clean_title(title)
+
+        if len(cleaned) <= available:
+            return cleaned
+
+        # Strategy 1: Remove stop words
+        shortened = self._remove_stop_words(cleaned)
+        if len(shortened) <= available:
+            return shortened
+
+        # Strategy 2: Abbreviate long words (keep first 4 chars)
+        shortened = self._abbreviate_words(shortened, min_word_length=6)
+        if len(shortened) <= available:
+            return shortened
+
+        # Strategy 3: More aggressive abbreviation (keep first 3 chars)
+        shortened = self._abbreviate_words(shortened, min_word_length=5, keep_chars=3)
+        if len(shortened) <= available:
+            return shortened
+
+        # Strategy 4: Truncate at word boundary
+        shortened = self._truncate_at_word_boundary(shortened, available)
+        return shortened
+
+    def _clean_title(self, title):
+        """Clean title: remove special chars, normalize spaces."""
+        # Convert accented chars to ASCII if unidecode is available
+        if unidecode:
+            title = unidecode(title)
+
+        # Remove special characters but keep alphanumeric and spaces
+        cleaned = re.sub(r'[^\w\s-]', '', title)
+        # Replace whitespace with underscores
+        cleaned = re.sub(r'\s+', '_', cleaned).strip('_')
+        # Remove multiple underscores
+        cleaned = re.sub(r'_+', '_', cleaned)
+        return cleaned
+
+    def _remove_stop_words(self, title):
+        """Remove stop words from title."""
+        words = title.split('_')
+        filtered = []
+        for word in words:
+            word_lower = word.lower()
+            # Keep numbers and non-stop words
+            if word_lower not in STOP_WORDS or word.isdigit():
+                filtered.append(word)
+        return '_'.join(filtered) if filtered else title
+
+    def _abbreviate_words(self, title, min_word_length=6, keep_chars=4):
+        """Abbreviate words longer than min_word_length."""
+        words = title.split('_')
+        abbreviated = []
+        for word in words:
+            if len(word) > min_word_length and not word.isdigit():
+                abbreviated.append(word[:keep_chars])
+            else:
+                abbreviated.append(word)
+        return '_'.join(abbreviated)
+
+    def _truncate_at_word_boundary(self, title, max_length):
+        """Truncate at word boundary."""
+        if len(title) <= max_length:
+            return title
+
+        words = title.split('_')
+        result = []
+        current_length = 0
+
+        for word in words:
+            # +1 for underscore separator
+            new_length = current_length + len(word) + (1 if result else 0)
+            if new_length <= max_length:
+                result.append(word)
+                current_length = new_length
+            else:
+                break
+
+        return '_'.join(result) if result else title[:max_length]
+
 
 class PodcastDownloader:
-    def __init__(self, feed_url, max_episodes=30, output_dir="."):
+    def __init__(self, feed_url, max_episodes=30, output_dir=".", max_filename_length=None):
         """
         Initialize the downloader.
 
@@ -30,12 +155,15 @@ class PodcastDownloader:
             feed_url: URL of the podcast RSS feed
             max_episodes: Maximum number of episodes to download (default: 30)
             output_dir: Base directory for downloads (default: current directory)
+            max_filename_length: Maximum filename length for devices with limits (default: None = no limit)
         """
         self.feed_url = feed_url
         self.max_episodes = max_episodes
         self.output_dir = Path(output_dir).resolve()
+        self.max_filename_length = max_filename_length
         self.feed_data = None
         self.podcast_dir = None
+        self.shortener = TitleShortener(max_filename_length) if max_filename_length else None
 
     def fetch_feed(self):
         """Fetch and parse the RSS feed."""
@@ -153,7 +281,16 @@ class PodcastDownloader:
 
         print(f"README.md updated at {readme_path}")
 
-    def download_episode(self, episode, index):
+    def _get_index_width(self, total_count):
+        """Calculate the minimum width needed for zero-padded indices."""
+        if total_count <= 9:
+            return 1
+        elif total_count <= 99:
+            return 2
+        else:
+            return 3
+
+    def download_episode(self, episode, index, index_width):
         """Download a single episode."""
         # Find the MP3 enclosure
         enclosure = None
@@ -173,15 +310,19 @@ class PodcastDownloader:
         title = episode.get('title', f"Episode_{index}")
         published = episode.get('published', '')
 
-        # Clean the title for filename
-        safe_title = re.sub(r'[\\/:*?"<>|]', '', title)
-        safe_title = re.sub(r'\s+', '_', safe_title).strip()
+        # Create filename with dynamic index width for chronological ordering
+        index_str = f"{index:0{index_width}d}"
+        prefix = f"{index_str}_"
 
-        # Create filename with incremental index for chronological ordering
-        # Format: 001_Title.mp3, 002_Title.mp3, etc.
-        # This ensures alphabetical sorting = chronological order
-        index_str = f"{index:03d}"  # Zero-padded to 3 digits (supports up to 999)
-        filename = f"{index_str}_{safe_title}.mp3"
+        # Use smart shortening if max_filename_length is set
+        if self.shortener:
+            safe_title = self.shortener.shorten(title, prefix_length=len(prefix))
+        else:
+            # Default cleaning without length limit
+            safe_title = re.sub(r'[\\/:*?"<>|]', '', title)
+            safe_title = re.sub(r'\s+', '_', safe_title).strip()
+
+        filename = f"{prefix}{safe_title}.mp3"
 
         filepath = self.podcast_dir / filename
 
@@ -236,6 +377,9 @@ class PodcastDownloader:
         # We reverse them so index 1 is the oldest episode (for proper chronological ordering)
         episodes = list(reversed(self.feed_data.entries[:self.max_episodes]))
 
+        # Calculate index width based on total episode count
+        index_width = self._get_index_width(len(episodes))
+
         print(f"\nFound {len(episodes)} episodes in feed.")
         print(f"Already downloaded: {len(downloaded_items)} episodes")
         print(f"Will attempt to download {len(episodes)} episodes\n")
@@ -245,7 +389,7 @@ class PodcastDownloader:
             title = episode.get('title', f"Episode_{i}")
             print(f"{i}. {title}")
 
-            if self.download_episode(episode, i):
+            if self.download_episode(episode, i, index_width):
                 success_count += 1
                 # Add to downloaded items list
                 downloaded_items.append(title)
@@ -289,13 +433,20 @@ def main():
         default=".",
         help="Output directory (default: current directory)"
     )
+    parser.add_argument(
+        "-m", "--max-length",
+        type=int,
+        default=None,
+        help="Maximum filename length for devices with limits (e.g., 27 for Remi babyphone)"
+    )
 
     args = parser.parse_args()
 
     downloader = PodcastDownloader(
         feed_url=args.feed_url,
         max_episodes=args.num,
-        output_dir=args.output
+        output_dir=args.output,
+        max_filename_length=args.max_length
     )
 
     success = downloader.run()
