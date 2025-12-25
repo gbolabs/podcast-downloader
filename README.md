@@ -52,6 +52,10 @@ podcast-downloader https://example.com/podcast.rss -m 27
 
 # Combine options
 podcast-downloader https://example.com/podcast.rss -n 20 -o ~/podcasts -m 27
+
+# Adjust parallel downloads (default: 2)
+podcast-downloader https://example.com/podcast.rss -p 1  # Sequential
+podcast-downloader https://example.com/podcast.rss -p 4  # More parallel
 ```
 
 ### As a library

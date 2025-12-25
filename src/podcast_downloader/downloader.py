@@ -20,6 +20,8 @@ from urllib.parse import urlparse
 from datetime import datetime
 from pathlib import Path
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 try:
     from unidecode import unidecode
@@ -147,7 +149,7 @@ class TitleShortener:
 
 
 class PodcastDownloader:
-    def __init__(self, feed_url, max_episodes=30, output_dir=".", max_filename_length=None):
+    def __init__(self, feed_url, max_episodes=30, output_dir=".", max_filename_length=None, parallel=2):
         """
         Initialize the downloader.
 
@@ -156,14 +158,29 @@ class PodcastDownloader:
             max_episodes: Maximum number of episodes to download (default: 30)
             output_dir: Base directory for downloads (default: current directory)
             max_filename_length: Maximum filename length for devices with limits (default: None = no limit)
+            parallel: Number of parallel downloads (default: 2, use 1 for sequential)
         """
         self.feed_url = feed_url
         self.max_episodes = max_episodes
         self.output_dir = Path(output_dir).resolve()
         self.max_filename_length = max_filename_length
+        self.parallel = max(1, parallel)
         self.feed_data = None
         self.podcast_dir = None
         self.shortener = TitleShortener(max_filename_length) if max_filename_length else None
+
+        # Create a session for connection pooling (faster repeated requests)
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=self.parallel,
+            pool_maxsize=self.parallel * 2,
+            max_retries=3
+        )
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
+
+        # Thread-safe print lock
+        self._print_lock = threading.Lock()
 
     def fetch_feed(self):
         """Fetch and parse the RSS feed."""
@@ -369,43 +386,39 @@ class PodcastDownloader:
 
         # Check if already downloaded
         if filepath.exists():
-            print(f"  Skipping: {title} (already downloaded)")
-            return True
+            with self._print_lock:
+                print(f"  [{index:02d}] Skipping: {title[:40]}... (exists)")
+            return (index, title, True, "skipped")
 
-        print(f"  Downloading: {title}")
+        with self._print_lock:
+            print(f"  [{index:02d}] Downloading: {title[:40]}...")
 
         try:
-            # Stream download to save memory
-            response = requests.get(audio_url, stream=True, timeout=30)
+            # Stream download using session (connection pooling)
+            response = self.session.get(audio_url, stream=True, timeout=(10, 60))
             response.raise_for_status()
 
             total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
 
             with open(filepath, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
+                for chunk in response.iter_content(chunk_size=65536):  # Larger chunks
                     if chunk:
                         f.write(chunk)
-                        downloaded += len(chunk)
 
-                        # Print progress
-                        if total_size > 0:
-                            percent = (downloaded / total_size) * 100
-                            sys.stdout.write(f"\r    Progress: {percent:.1f}%")
-                            sys.stdout.flush()
-
-            sys.stdout.write("\n")
-            print(f"  Saved: {filepath.name}")
-            return True
+            with self._print_lock:
+                size_mb = total_size / (1024 * 1024) if total_size else 0
+                print(f"  [{index:02d}] Done: {filepath.name} ({size_mb:.1f} MB)")
+            return (index, title, True, "downloaded")
 
         except Exception as e:
-            print(f"  Error downloading {title}: {e}")
+            with self._print_lock:
+                print(f"  [{index:02d}] Error: {title[:30]}... - {e}")
             if filepath.exists():
                 filepath.unlink()  # Remove partial file
-            return False
+            return (index, title, False, str(e))
 
     def download_episodes(self):
-        """Download the latest episodes."""
+        """Download the latest episodes (parallel or sequential)."""
         if not self.feed_data or not self.feed_data.entries:
             print("No episodes found in feed.")
             return False
@@ -421,23 +434,46 @@ class PodcastDownloader:
 
         print(f"\nFound {total_count} episodes in feed.")
         print(f"Already downloaded: {len(downloaded_items)} episodes")
-        print(f"Will attempt to download {total_count} episodes\n")
+        print(f"Downloading with {self.parallel} parallel connections...\n")
+
+        import time
+        start_time = time.time()
 
         success_count = 0
-        for i, episode in enumerate(episodes, 1):
-            title = episode.get('title', f"Episode_{i}")
-            print(f"{i}. {title}")
+        download_count = 0
 
-            if self.download_episode(episode, i, total_count):
-                success_count += 1
-                # Add to downloaded items list
-                downloaded_items.append(title)
+        # Prepare download tasks: (episode, index, total_count)
+        tasks = [(ep, i, total_count) for i, ep in enumerate(episodes, 1)]
+
+        # Use ThreadPoolExecutor for parallel downloads
+        with ThreadPoolExecutor(max_workers=self.parallel) as executor:
+            # Submit all download tasks
+            futures = {
+                executor.submit(self.download_episode, ep, idx, total): (idx, ep)
+                for ep, idx, total in tasks
+            }
+
+            # Process completed downloads
+            for future in as_completed(futures):
+                idx, ep = futures[future]
+                try:
+                    result = future.result()
+                    index, title, success, status = result
+                    if success:
+                        success_count += 1
+                        downloaded_items.append(title)
+                        if status == "downloaded":
+                            download_count += 1
+                except Exception as e:
+                    print(f"  Task error: {e}")
+
+        elapsed = time.time() - start_time
 
         # Update README
         self.save_readme(downloaded_items, total_count)
 
-        print(f"\nDownload complete!")
-        print(f"Successfully downloaded {success_count}/{len(episodes)} episodes")
+        print(f"\nDownload complete in {elapsed:.1f}s")
+        print(f"Downloaded: {download_count}, Skipped: {success_count - download_count}, Failed: {total_count - success_count}")
         return True
 
     def run(self):
@@ -478,6 +514,12 @@ def main():
         default=None,
         help="Maximum filename length for devices with limits (e.g., 27 for Remi babyphone)"
     )
+    parser.add_argument(
+        "-p", "--parallel",
+        type=int,
+        default=2,
+        help="Number of parallel downloads (default: 2)"
+    )
 
     args = parser.parse_args()
 
@@ -485,7 +527,8 @@ def main():
         feed_url=args.feed_url,
         max_episodes=args.num,
         output_dir=args.output,
-        max_filename_length=args.max_length
+        max_filename_length=args.max_length,
+        parallel=args.parallel
     )
 
     success = downloader.run()
