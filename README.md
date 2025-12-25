@@ -1,91 +1,112 @@
 # Podcast Downloader
 
-A simple Python application to download podcast episodes from RSS feeds.
+A Python CLI tool to download podcast episodes from RSS feeds.
 
 ## Features
 
-- Downloads the latest N podcast episodes (default: 30)
-- Creates a directory named after the podcast
-- Stores downloaded episodes with proper filenames
-- Maintains a README.md with metadata
-- Tracks already downloaded items to avoid duplicates
+- Downloads the latest N episodes (default: 30)
+- Creates organized directories named after the podcast
+- Numbers files (001-999) for chronological ordering
+- Tracks downloaded episodes to avoid duplicates
 - Shows download progress
+- Generates a README with episode metadata
 
-## Requirements
+## Installation
 
-- Python 3.6+
-- `feedparser` library
-- `requests` library
+### From source
 
-Install dependencies:
+```bash
+git clone https://github.com/gbo/podcast-download.git
+cd podcast-download
+pip install -e .
+```
+
+### Dependencies only
+
 ```bash
 pip install feedparser requests
 ```
 
 ## Usage
 
-### Basic Usage
-
-Download the latest 30 episodes from a podcast feed:
-```bash
-python podcast_downloader.py https://example.com/podcast.rss
-```
-
-### Download Specific Number of Episodes
-
-Download only 10 episodes:
-```bash
-python podcast_downloader.py https://example.com/podcast.rss -n 10
-```
-
-### Specify Output Directory
-
-Save episodes to a specific directory:
-```bash
-python podcast_downloader.py https://example.com/podcast.rss -o ~/podcasts
-```
-
-### Combine Options
+### Command Line
 
 ```bash
-python podcast_downloader.py https://example.com/podcast.rss -n 20 -o ~/podcasts
+# Download latest 30 episodes
+podcast-downloader https://example.com/podcast.rss
+
+# Download 10 episodes
+podcast-downloader https://example.com/podcast.rss -n 10
+
+# Save to specific directory
+podcast-downloader https://example.com/podcast.rss -o ~/podcasts
+
+# Combine options
+podcast-downloader https://example.com/podcast.rss -n 20 -o ~/podcasts
 ```
 
-## How It Works
+### As a library
 
-1. **Fetch Feed**: Downloads and parses the RSS feed
-2. **Create Directory**: Creates a directory named after the podcast
-3. **Download Episodes**: Downloads the latest N episodes as MP3 files
-4. **Create README**: Generates a README.md file with:
-   - Podcast title and description
-   - Feed URL
-   - List of downloaded episodes (marked with checkboxes)
-   - Last update timestamp
+```python
+from podcast_downloader import PodcastDownloader
 
-## Example Output
+downloader = PodcastDownloader(
+    feed_url="https://example.com/podcast.rss",
+    max_episodes=10,
+    output_dir="./podcasts"
+)
+downloader.run()
+```
+
+## Output Structure
 
 ```
 Podcast_Name/
-├── 2023-01-15_Episode_123.mp3
-├── 2023-01-10_Episode_122.mp3
-├── ...
+├── 001_First_Episode.mp3
+├── 002_Second_Episode.mp3
+├── 003_Third_Episode.mp3
 └── README.md
 ```
 
-**Note:** Episode files are named with dates in `YYYY-MM-DD` format, which ensures they sort chronologically when listed alphabetically. See [000_CHRONOLOGICAL_SORTING_DEMO.md](000_CHRONOLOGICAL_SORTING_DEMO.md) for more details.
+Files are numbered with zero-padded indices (001-999) to ensure alphabetical sorting matches chronological order.
 
-The README.md will contain:
-- Podcast information
-- Feed URL
-- List of episodes with checkboxes indicating which are downloaded
+## Project Structure
 
-## Notes
+```
+podcast-download/
+├── src/
+│   └── podcast_downloader/
+│       ├── __init__.py
+│       └── downloader.py
+├── tests/
+│   └── test_downloader.py
+├── examples/
+│   └── demo.py
+├── pyproject.toml
+├── .gitignore
+└── README.md
+```
 
-- The application checks for existing files and skips re-downloading them
-- Episode filenames include the publication date when available
-- Invalid characters in titles are replaced with underscores for filesystem safety
-- The README.md is updated after each run to reflect the current state
+## Development
+
+### Setup
+
+```bash
+pip install -e ".[dev]"
+```
+
+### Run tests
+
+```bash
+pytest
+```
+
+## Requirements
+
+- Python 3.8+
+- feedparser
+- requests
 
 ## License
 
-This is a simple utility script. Feel free to use and modify it as needed.
+MIT
