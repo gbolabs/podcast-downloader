@@ -61,10 +61,12 @@ venv.bak/
 
 # IDE
 .idea/
-.vscode/
 *.swp
 *.swo
 *~
+
+# VS Code - track settings but not personal preferences
+# .vscode/ is tracked for shared debug configs
 
 # macOS
 .DS_Store

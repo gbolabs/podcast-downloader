@@ -92,8 +92,28 @@ podcast-download/
 ### Setup
 
 ```bash
+# Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install with dev dependencies
 pip install -e ".[dev]"
+
+# Or use requirements.txt
+pip install -r requirements.txt
+pip install -e .
 ```
+
+### VS Code
+
+The project includes VS Code configurations for debugging:
+
+1. Open the project in VS Code
+2. Select the Python interpreter from `.venv`
+3. Use the Run and Debug panel (F5) with these configurations:
+   - **Python: Download Podcast** - Debug the CLI with sample args
+   - **Python: Current File** - Debug any open file
+   - **Python: Debug Tests** - Debug pytest tests
 
 ### Run tests
 

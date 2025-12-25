@@ -1,0 +1,8 @@
+# Core dependencies
+feedparser>=6.0
+requests>=2.25
+
+# Development dependencies
+pytest>=7.0
+pytest-cov>=4.0
+ruff>=0.1.0
