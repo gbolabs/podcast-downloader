@@ -247,83 +247,82 @@ class PodcastDownloader:
 
         return self.output_dir / folder_name
 
-    def get_readme_path(self, total_count=1):
-        """Get the path to the README.md file (in the first/main folder)."""
+    def save_index(self, total_count):
+        """Create an index.md file mapping shortened filenames to original metadata."""
         folder = self._get_batch_folder(1, total_count)
-        return folder / "README.md"
-
-    def load_downloaded_items(self):
-        """Load the list of already downloaded episodes from README.md."""
-        readme_path = self.get_readme_path()
-
-        if not readme_path.exists():
-            return []
-
-        try:
-            with open(readme_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            # Extract downloaded items from the README
-            # Look for lines like "- [x] Episode Title (date)"
-            downloaded = []
-            for line in content.split('\n'):
-                if line.strip().startswith('- [x] '):
-                    # Extract the episode title
-                    title = line.strip()[6:]  # Remove "- [x] "
-                    downloaded.append(title)
-
-            return downloaded
-        except Exception as e:
-            print(f"Warning: Could not read README.md: {e}")
-            return []
-
-    def save_readme(self, downloaded_items, total_count):
-        """Create or update the README.md file."""
-        readme_path = self.get_readme_path(total_count)
+        index_path = folder / "index.md"
 
         # Get podcast information
         feed = self.feed_data.feed
         title = feed.get('title', 'Unknown Podcast')
-        description = feed.get('description', '')
-        link = feed.get('link', self.feed_url)
 
-        # Format description for markdown
-        description_md = f"\n{description}\n" if description else ""
-
-        # Create README content
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         content = f"# {title}\n\n"
-        content += f"**Feed URL:** {self.feed_url}\n\n"
-        content += f"**Last updated:** {now}\n\n"
-        content += f"**Description:**{description_md}\n\n"
-        content += "---\n\n"
-        content += "## Downloaded Episodes\n\n"
+        content += f"**Feed:** {self.feed_url}\n\n"
+        content += f"**Generated:** {now}\n\n"
 
-        # List all episodes from the feed (up to max_episodes)
-        # Use the same reversed order as download_episodes for consistency
+        # Table header
+        content += "| # | File | Original Title | Description | Date |\n"
+        content += "|---|------|----------------|-------------|------|\n"
+
+        # Get episodes in chronological order
         episodes = list(reversed(self.feed_data.entries[:self.max_episodes]))
 
-        for episode in episodes:
+        for i, episode in enumerate(episodes, 1):
             episode_title = episode.get('title', 'Untitled')
             published = episode.get('published', '')
+            description = episode.get('summary', episode.get('description', ''))
 
-            # Check if this episode was downloaded
-            if episode_title in downloaded_items:
-                status = 'x'
+            # Clean description for table (remove HTML, truncate)
+            if description:
+                description = re.sub(r'<[^>]+>', '', description)  # Remove HTML
+                description = re.sub(r'\s+', ' ', description).strip()  # Normalize whitespace
+                if len(description) > 80:
+                    description = description[:77] + "..."
+
+            # Generate the filename that would be created
+            batch_folder, display_index = None, i
+            if total_count > 100:
+                batch_num = (i - 1) // 100
+                display_index = (i - 1) % 100
+                index_width = 2
             else:
-                status = ' '
+                index_width = self._get_index_width(total_count)
+                display_index = i
 
-            content += f"- [{status}] {episode_title}"
+            index_str = f"{display_index:0{index_width}d}"
+            prefix = f"{index_str}_"
+
+            if self.shortener:
+                safe_title = self.shortener.shorten(episode_title, prefix_length=len(prefix))
+            else:
+                safe_title = re.sub(r'[\\/:*?"<>|]', '', episode_title)
+                safe_title = re.sub(r'\s+', '_', safe_title).strip()
+
+            filename = f"{prefix}{safe_title}.mp3"
+
+            # Parse date to simpler format
+            simple_date = published
             if published:
-                content += f" ({published})"
-            content += "\n"
+                try:
+                    from email.utils import parsedate_to_datetime
+                    dt = parsedate_to_datetime(published)
+                    simple_date = dt.strftime("%Y-%m-%d")
+                except:
+                    pass
+
+            # Escape pipe characters for markdown table
+            episode_title_escaped = episode_title.replace('|', '\\|')
+            description_escaped = description.replace('|', '\\|') if description else '-'
+
+            content += f"| {i} | `{filename}` | {episode_title_escaped} | {description_escaped} | {simple_date} |\n"
 
         # Write to file
-        with open(readme_path, 'w', encoding='utf-8') as f:
+        with open(index_path, 'w', encoding='utf-8') as f:
             f.write(content)
 
-        print(f"README.md updated at {readme_path}")
+        print(f"index.md created at {index_path}")
 
     def _get_index_width(self, count):
         """Calculate the minimum width needed for zero-padded indices."""
@@ -423,9 +422,6 @@ class PodcastDownloader:
             print("No episodes found in feed.")
             return False
 
-        # Load already downloaded items
-        downloaded_items = self.load_downloaded_items()
-
         # Get episodes to download (up to max_episodes)
         # RSS feeds typically return episodes in reverse chronological order (newest first)
         # We reverse them so index 1 is the oldest episode (for proper chronological ordering)
@@ -433,7 +429,6 @@ class PodcastDownloader:
         total_count = len(episodes)
 
         print(f"\nFound {total_count} episodes in feed.")
-        print(f"Already downloaded: {len(downloaded_items)} episodes")
         print(f"Downloading with {self.parallel} parallel connections...\n")
 
         import time
@@ -441,6 +436,7 @@ class PodcastDownloader:
 
         success_count = 0
         download_count = 0
+        skip_count = 0
 
         # Prepare download tasks: (episode, index, total_count)
         tasks = [(ep, i, total_count) for i, ep in enumerate(episodes, 1)]
@@ -461,16 +457,17 @@ class PodcastDownloader:
                     index, title, success, status = result
                     if success:
                         success_count += 1
-                        downloaded_items.append(title)
                         if status == "downloaded":
                             download_count += 1
+                        elif status == "skipped":
+                            skip_count += 1
                 except Exception as e:
                     print(f"  Task error: {e}")
 
         elapsed = time.time() - start_time
 
-        # Update README
-        self.save_readme(downloaded_items, total_count)
+        # Generate index file
+        self.save_index(total_count)
 
         print(f"\nDownload complete in {elapsed:.1f}s")
         print(f"Downloaded: {download_count}, Skipped: {success_count - download_count}, Failed: {total_count - success_count}")
