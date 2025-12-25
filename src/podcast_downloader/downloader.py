@@ -178,35 +178,62 @@ class PodcastDownloader:
             return False
 
     def get_podcast_name(self):
-        """Extract a safe podcast name from the feed."""
+        """Extract a safe podcast name from the feed, respecting max_filename_length."""
         if not self.feed_data:
             return "podcast"
 
         # Try to get the title from various sources
         title = self.feed_data.feed.get('title', 'podcast')
 
-        # Clean the title to make it filesystem-safe
-        # Remove invalid characters
-        safe_name = re.sub(r'[\\/:*?"<>|]', '', title)
-        # Replace whitespace with underscores
-        safe_name = re.sub(r'\s+', '_', safe_name).strip()
-        # Limit length
-        safe_name = safe_name[:100]
+        # Use smart shortening if max_filename_length is set
+        if self.shortener:
+            # For folder name, use the full max_length (no prefix, no extension)
+            folder_shortener = TitleShortener(self.max_filename_length)
+            safe_name = folder_shortener._clean_title(title)
 
-        return safe_name
+            if len(safe_name) > self.max_filename_length:
+                safe_name = folder_shortener._remove_stop_words(safe_name)
+            if len(safe_name) > self.max_filename_length:
+                safe_name = folder_shortener._abbreviate_words(safe_name, min_word_length=6)
+            if len(safe_name) > self.max_filename_length:
+                safe_name = folder_shortener._truncate_at_word_boundary(safe_name, self.max_filename_length)
+
+            return safe_name
+        else:
+            # Default: clean but don't limit length
+            safe_name = re.sub(r'[\\/:*?"<>|]', '', title)
+            safe_name = re.sub(r'\s+', '_', safe_name).strip()
+            safe_name = safe_name[:100]
+            return safe_name
 
     def create_podcast_directory(self):
-        """Create the directory for this podcast."""
-        podcast_name = self.get_podcast_name()
-        self.podcast_dir = self.output_dir / podcast_name
+        """Create the directory for this podcast (called after knowing episode count)."""
+        # podcast_dir is set dynamically per batch in download_episode
+        # This just stores the base podcast name
+        self.podcast_name = self.get_podcast_name()
+        print(f"Podcast: {self.podcast_name}")
 
-        # Create directory if it doesn't exist
-        self.podcast_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Podcast directory: {self.podcast_dir}")
+    def _get_batch_folder(self, index, total_count):
+        """
+        Get the folder path for an episode based on batching.
 
-    def get_readme_path(self):
-        """Get the path to the README.md file."""
-        return self.podcast_dir / "README.md"
+        For ≤100 episodes: just podcast_name/
+        For >100 episodes: N_podcast_name/ where N is batch number (0, 1, 2...)
+        Each batch contains up to 100 files (00-99).
+        """
+        if total_count <= 100:
+            return self.output_dir / self.podcast_name
+
+        # Calculate batch number (0-indexed, 100 files per batch)
+        batch_num = (index - 1) // 100
+        folder_name = f"{batch_num}_{self.podcast_name}"
+
+        return self.output_dir / folder_name
+
+    def get_readme_path(self, total_count=1):
+        """Get the path to the README.md file (in the first/main folder)."""
+        folder = self._get_batch_folder(1, total_count)
+        return folder / "README.md"
 
     def load_downloaded_items(self):
         """Load the list of already downloaded episodes from README.md."""
@@ -233,9 +260,9 @@ class PodcastDownloader:
             print(f"Warning: Could not read README.md: {e}")
             return []
 
-    def save_readme(self, downloaded_items):
+    def save_readme(self, downloaded_items, total_count):
         """Create or update the README.md file."""
-        readme_path = self.get_readme_path()
+        readme_path = self.get_readme_path(total_count)
 
         # Get podcast information
         feed = self.feed_data.feed
@@ -281,16 +308,16 @@ class PodcastDownloader:
 
         print(f"README.md updated at {readme_path}")
 
-    def _get_index_width(self, total_count):
+    def _get_index_width(self, count):
         """Calculate the minimum width needed for zero-padded indices."""
-        if total_count <= 9:
+        if count <= 9:
             return 1
-        elif total_count <= 99:
+        elif count <= 99:
             return 2
         else:
             return 3
 
-    def download_episode(self, episode, index, index_width):
+    def download_episode(self, episode, index, total_count):
         """Download a single episode."""
         # Find the MP3 enclosure
         enclosure = None
@@ -310,8 +337,22 @@ class PodcastDownloader:
         title = episode.get('title', f"Episode_{index}")
         published = episode.get('published', '')
 
-        # Create filename with dynamic index width for chronological ordering
-        index_str = f"{index:0{index_width}d}"
+        # Get target folder (may be batched for >100 episodes)
+        target_dir = self._get_batch_folder(index, total_count)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        # Calculate display index within batch
+        if total_count <= 100:
+            # Single folder: use dynamic width based on count
+            index_width = self._get_index_width(total_count)
+            display_index = index
+        else:
+            # Batched folders: always 00-99 within each batch
+            index_width = 2
+            display_index = (index - 1) % 100  # 0-99 within batch
+
+        # Create filename with appropriate index
+        index_str = f"{display_index:0{index_width}d}"
         prefix = f"{index_str}_"
 
         # Use smart shortening if max_filename_length is set
@@ -324,7 +365,7 @@ class PodcastDownloader:
 
         filename = f"{prefix}{safe_title}.mp3"
 
-        filepath = self.podcast_dir / filename
+        filepath = target_dir / filename
 
         # Check if already downloaded
         if filepath.exists():
@@ -376,26 +417,24 @@ class PodcastDownloader:
         # RSS feeds typically return episodes in reverse chronological order (newest first)
         # We reverse them so index 1 is the oldest episode (for proper chronological ordering)
         episodes = list(reversed(self.feed_data.entries[:self.max_episodes]))
+        total_count = len(episodes)
 
-        # Calculate index width based on total episode count
-        index_width = self._get_index_width(len(episodes))
-
-        print(f"\nFound {len(episodes)} episodes in feed.")
+        print(f"\nFound {total_count} episodes in feed.")
         print(f"Already downloaded: {len(downloaded_items)} episodes")
-        print(f"Will attempt to download {len(episodes)} episodes\n")
+        print(f"Will attempt to download {total_count} episodes\n")
 
         success_count = 0
         for i, episode in enumerate(episodes, 1):
             title = episode.get('title', f"Episode_{i}")
             print(f"{i}. {title}")
 
-            if self.download_episode(episode, i, index_width):
+            if self.download_episode(episode, i, total_count):
                 success_count += 1
                 # Add to downloaded items list
                 downloaded_items.append(title)
 
         # Update README
-        self.save_readme(downloaded_items)
+        self.save_readme(downloaded_items, total_count)
 
         print(f"\nDownload complete!")
         print(f"Successfully downloaded {success_count}/{len(episodes)} episodes")

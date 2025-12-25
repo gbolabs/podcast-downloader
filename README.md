@@ -68,15 +68,28 @@ downloader.run()
 
 ## Output Structure
 
+For up to 100 episodes:
 ```
 Podcast_Name/
-├── 001_First_Episode.mp3
-├── 002_Second_Episode.mp3
-├── 003_Third_Episode.mp3
+├── 01_First_Episode.mp3
+├── 02_Second_Episode.mp3
+├── ...
 └── README.md
 ```
 
-Files are numbered with zero-padded indices (001-999) to ensure alphabetical sorting matches chronological order.
+For 100+ episodes (sibling folders, 100 files each):
+```
+0_Podcast_Name/
+├── 00_Episode_1.mp3
+├── 01_Episode_2.mp3
+└── 99_Episode_100.mp3
+
+1_Podcast_Name/
+├── 00_Episode_101.mp3
+└── 49_Episode_150.mp3
+```
+
+This structure works on devices without subfolder support (like Remi babyphone).
 
 ## Project Structure
 
