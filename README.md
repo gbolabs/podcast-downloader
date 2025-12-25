@@ -7,10 +7,12 @@ A Python CLI tool to download podcast episodes from RSS feeds.
 - Downloads the latest N episodes (default: 30)
 - Creates organized directories named after the podcast
 - Dynamic numbering (1-9, 01-99, 001-999) based on episode count
-- **Smart filename shortening** for devices with length limits (e.g., Remi babyphone)
+- **Remi babyphone compatibility** (`-m 27` option):
+  - Smart filename shortening to fit device display limits
   - Converts accents to ASCII (é→e, ô→o)
   - Removes stop words (le, la, the, of...)
   - Abbreviates long words intelligently
+  - Sibling folder batching for 100+ episodes (no subfolders needed)
 - Tracks downloaded episodes to avoid duplicates
 - Shows download progress
 - Generates a README with episode metadata
@@ -45,7 +47,7 @@ podcast-downloader https://example.com/podcast.rss -n 10
 # Save to specific directory
 podcast-downloader https://example.com/podcast.rss -o ~/podcasts
 
-# Limit filename length (for devices like Remi babyphone)
+# For Remi babyphone (27-char filename limit)
 podcast-downloader https://example.com/podcast.rss -m 27
 
 # Combine options
@@ -89,7 +91,10 @@ For 100+ episodes (sibling folders, 100 files each):
 └── 49_Episode_150.mp3
 ```
 
-This structure works on devices without subfolder support (like Remi babyphone).
+This sibling folder structure is designed for devices like **Remi babyphone** that:
+- Have a ~27 character filename display limit
+- Support folders but not nested subfolders
+- Sort files alphabetically
 
 ## Project Structure
 
