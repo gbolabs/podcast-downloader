@@ -22,11 +22,64 @@ from pathlib import Path
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import subprocess
+import shutil
 
 try:
     from unidecode import unidecode
 except ImportError:
     unidecode = None
+
+
+def check_ffmpeg():
+    """Check if ffmpeg is available on the system."""
+    return shutil.which('ffmpeg') is not None
+
+
+def convert_audio(input_path, output_path, mono=True, bitrate=64, sample_rate=22050, joint_stereo=False):
+    """
+    Convert audio file using ffmpeg.
+
+    Args:
+        input_path: Path to input file
+        output_path: Path to output file
+        mono: Convert to mono (default: True)
+        bitrate: Target bitrate in kbps (default: 64)
+        sample_rate: Target sample rate in Hz (default: 22050)
+        joint_stereo: Use joint stereo mode (default: False)
+
+    Returns:
+        True if conversion successful, False otherwise
+    """
+    cmd = ['ffmpeg', '-y', '-i', str(input_path)]
+
+    # Audio channels
+    if joint_stereo:
+        cmd.extend(['-ac', '2', '-joint_stereo', '1'])
+    elif mono:
+        cmd.extend(['-ac', '1'])
+
+    # Bitrate
+    cmd.extend(['-b:a', f'{bitrate}k'])
+
+    # Sample rate
+    cmd.extend(['-ar', str(sample_rate)])
+
+    # Output format
+    cmd.extend(['-f', 'mp3', str(output_path)])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=300  # 5 min timeout per file
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception:
+        return False
 
 
 # Stop words to remove when shortening titles (multilingual)
@@ -149,7 +202,8 @@ class TitleShortener:
 
 
 class PodcastDownloader:
-    def __init__(self, feed_url, max_episodes=30, output_dir=".", max_filename_length=None, parallel=2):
+    def __init__(self, feed_url, max_episodes=30, output_dir=".", max_filename_length=None, parallel=2,
+                 convert=False, mono=True, bitrate=64, sample_rate=22050, joint_stereo=False):
         """
         Initialize the downloader.
 
@@ -159,6 +213,11 @@ class PodcastDownloader:
             output_dir: Base directory for downloads (default: current directory)
             max_filename_length: Maximum filename length for devices with limits (default: None = no limit)
             parallel: Number of parallel downloads (default: 2, use 1 for sequential)
+            convert: Convert audio files to reduce size (default: False)
+            mono: Convert to mono when converting (default: True)
+            bitrate: Target bitrate in kbps when converting (default: 64)
+            sample_rate: Target sample rate in Hz when converting (default: 22050)
+            joint_stereo: Use joint stereo mode for compatibility (default: False)
         """
         self.feed_url = feed_url
         self.max_episodes = max_episodes
@@ -168,6 +227,17 @@ class PodcastDownloader:
         self.feed_data = None
         self.podcast_dir = None
         self.shortener = TitleShortener(max_filename_length) if max_filename_length else None
+
+        # Audio conversion settings
+        self.convert = convert
+        self.mono = mono
+        self.bitrate = bitrate
+        self.sample_rate = sample_rate
+        self.joint_stereo = joint_stereo
+
+        if self.convert and not check_ffmpeg():
+            print("Warning: ffmpeg not found. Audio conversion disabled.")
+            self.convert = False
 
         # Create a session for connection pooling (faster repeated requests)
         self.session = requests.Session()
@@ -404,9 +474,35 @@ class PodcastDownloader:
                     if chunk:
                         f.write(chunk)
 
-            with self._print_lock:
-                size_mb = total_size / (1024 * 1024) if total_size else 0
-                print(f"  [{index:02d}] Done: {filepath.name} ({size_mb:.1f} MB)")
+            original_size = filepath.stat().st_size
+
+            # Convert audio if enabled
+            if self.convert:
+                with self._print_lock:
+                    print(f"  [{index:02d}] Converting: {title[:40]}...")
+
+                temp_path = filepath.with_suffix('.tmp.mp3')
+                if convert_audio(filepath, temp_path, self.mono, self.bitrate, self.sample_rate, self.joint_stereo):
+                    # Replace original with converted
+                    filepath.unlink()
+                    temp_path.rename(filepath)
+                    final_size = filepath.stat().st_size
+                    reduction = (1 - final_size / original_size) * 100 if original_size > 0 else 0
+                    with self._print_lock:
+                        size_mb = final_size / (1024 * 1024)
+                        print(f"  [{index:02d}] Done: {filepath.name} ({size_mb:.1f} MB, -{reduction:.0f}%)")
+                else:
+                    # Conversion failed, keep original
+                    if temp_path.exists():
+                        temp_path.unlink()
+                    with self._print_lock:
+                        size_mb = original_size / (1024 * 1024)
+                        print(f"  [{index:02d}] Done: {filepath.name} ({size_mb:.1f} MB, conversion failed)")
+            else:
+                with self._print_lock:
+                    size_mb = original_size / (1024 * 1024)
+                    print(f"  [{index:02d}] Done: {filepath.name} ({size_mb:.1f} MB)")
+
             return (index, title, True, "downloaded")
 
         except Exception as e:
@@ -518,14 +614,65 @@ def main():
         help="Number of parallel downloads (default: 2)"
     )
 
+    # Audio conversion options
+    parser.add_argument(
+        "--remi",
+        action="store_true",
+        help="Remi babyphone preset: mono 64kbps, max filename 27 chars"
+    )
+    parser.add_argument(
+        "--remi-mini",
+        action="store_true",
+        help="Remi mini preset: joint stereo 32kbps 16kHz for maximum compression"
+    )
+    parser.add_argument(
+        "--convert",
+        action="store_true",
+        help="Convert audio to reduce file size (requires ffmpeg)"
+    )
+    parser.add_argument(
+        "--bitrate",
+        type=int,
+        default=64,
+        help="Audio bitrate in kbps when converting (default: 64)"
+    )
+    parser.add_argument(
+        "--sample-rate",
+        type=int,
+        default=22050,
+        help="Audio sample rate in Hz when converting (default: 22050)"
+    )
+    parser.add_argument(
+        "--stereo",
+        action="store_true",
+        help="Keep stereo when converting (default: convert to mono)"
+    )
+
     args = parser.parse_args()
+
+    # Apply Remi presets if specified
+    joint_stereo = False
+    if args.remi_mini:
+        args.convert = True
+        args.max_length = args.max_length or 27
+        args.bitrate = 32
+        args.sample_rate = 16000
+        joint_stereo = True
+    elif args.remi:
+        args.convert = True
+        args.max_length = args.max_length or 27
 
     downloader = PodcastDownloader(
         feed_url=args.feed_url,
         max_episodes=args.num,
         output_dir=args.output,
         max_filename_length=args.max_length,
-        parallel=args.parallel
+        parallel=args.parallel,
+        convert=args.convert,
+        mono=not args.stereo and not joint_stereo,
+        bitrate=args.bitrate,
+        sample_rate=args.sample_rate,
+        joint_stereo=joint_stereo
     )
 
     success = downloader.run()
