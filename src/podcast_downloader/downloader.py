@@ -618,12 +618,12 @@ def main():
     parser.add_argument(
         "--remi",
         action="store_true",
-        help="Remi babyphone preset: mono 64kbps, max filename 27 chars"
+        help="Remi babyphone preset: mono 64kbps 44.1kHz, max filename 27 chars"
     )
     parser.add_argument(
         "--remi-mini",
         action="store_true",
-        help="Remi mini preset: joint stereo 32kbps 16kHz for maximum compression"
+        help="Remi mini preset: joint stereo 32kbps 44.1kHz for maximum compression"
     )
     parser.add_argument(
         "--convert",
@@ -651,16 +651,18 @@ def main():
     args = parser.parse_args()
 
     # Apply Remi presets if specified
+    # Note: Remi requires 44100 Hz, other sample rates may play incorrectly
     joint_stereo = False
     if args.remi_mini:
         args.convert = True
         args.max_length = args.max_length or 27
         args.bitrate = 32
-        args.sample_rate = 16000
+        args.sample_rate = 44100  # Remi requires 44100 Hz
         joint_stereo = True
     elif args.remi:
         args.convert = True
         args.max_length = args.max_length or 27
+        args.sample_rate = 44100  # Remi requires 44100 Hz
 
     downloader = PodcastDownloader(
         feed_url=args.feed_url,
